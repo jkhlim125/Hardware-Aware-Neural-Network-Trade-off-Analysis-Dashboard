@@ -1,5 +1,28 @@
 # Hardware-Aware Neural Network Trade-off Analysis Dashboard
 
+Streamlit live demo:
+https://hardware-aware-experiment-dashboard-x95bufhzfrgdusxyf593hv.streamlit.app/
+
+## Problem
+
+Neural network deployment on hardware (e.g., FPGA, edge devices) requires balancing two conflicting objectives:
+
+- Maximizing model accuracy
+- Minimizing hardware resource usage (e.g., pin count, slice utilization)
+
+Techniques such as pruning and quantization improve hardware efficiency but degrade accuracy.
+
+The key challenge is that there is no single optimal configuration — the best choice depends on deployment priorities.
+
+## Motivation
+
+In practice, selecting a configuration is not just about maximizing a single metric.
+
+Instead, engineers must make trade-offs based on system constraints (e.g., latency, hardware budget, accuracy requirements).
+
+This project was built to explicitly model and analyze these trade-offs, enabling more informed decision-making.
+
+
 ## Approach
 
 This project provides an interactive analysis tool to explore the trade-off between hardware efficiency and model performance.
@@ -14,8 +37,7 @@ Trade-off Score = Pin Reduction − λ × Accuracy Drop
 
 By adjusting λ, users can simulate different deployment priorities and observe how the optimal configuration changes.
 
-Streamlit live demo:
-https://hardware-aware-experiment-dashboard-x95bufhzfrgdusxyf593hv.streamlit.app/
+This transforms experiment logs into a decision-support system rather than simple visualization.
 
 ## Note
 An earlier version of this project (`legacy_log_dashboard.py`) was initially developed for simple log visualization.  
