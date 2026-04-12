@@ -13,6 +13,8 @@ Trade-off Score = Pin Reduction − λ × Accuracy Drop
 - λ (lambda) controls the relative importance of accuracy vs hardware efficiency
 
 By adjusting λ, users can simulate different deployment priorities and observe how the optimal configuration changes.
+
+Streamlit live demo:
 https://hardware-aware-experiment-dashboard-x95bufhzfrgdusxyf593hv.streamlit.app/
 
 ## Note
