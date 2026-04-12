@@ -1,4 +1,3 @@
-from pathlib import Path
 import tempfile
 
 import pandas as pd
@@ -14,6 +13,47 @@ from analysis_engine import (
     build_summary_text,
 )
 
+def format_config_text(row):
+    pr = row["pack_ratio"]
+    gs = row["global_sparsity"]
+    return f"PR={pr:.2f}, GS={gs:.2f}"
+
+
+def get_best_accuracy_config(df):
+    d = df[~df["is_baseline"]].copy().dropna(subset=["max_acc"])
+    if d.empty:
+        return None
+    return d.sort_values("max_acc", ascending=False).iloc[0]
+
+
+def get_max_pin_config(df):
+    d = df[~df["is_baseline"]].copy().dropna(subset=["pin_reduction"])
+    if d.empty:
+        return None
+    return d.sort_values("pin_reduction", ascending=False).iloc[0]
+
+
+def get_min_acc_drop_config(df):
+    d = df[~df["is_baseline"]].copy().dropna(subset=["acc_drop_positive"])
+    if d.empty:
+        return None
+    return d.sort_values("acc_drop_positive", ascending=True).iloc[0]
+
+def apply_plot_style(fig, title, x_title, y_title, height=600):
+    fig.update_layout(
+        title=title,
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        height=height,
+        font=dict(size=13),
+        title_font=dict(size=22),
+        legend=dict(font=dict(size=12)),
+        margin=dict(l=40, r=40, t=70, b=40),
+    )
+    fig.update_xaxes(title_font=dict(size=16), tickfont=dict(size=12))
+    fig.update_yaxes(title_font=dict(size=16), tickfont=dict(size=12))
+    return fig
+
 
 st.set_page_config(page_title="Hardware-Aware Experiment Dashboard", layout="wide")
 
@@ -25,6 +65,11 @@ st.write(
 
 st.sidebar.header("Settings")
 
+st.sidebar.markdown("### Input")
+uploaded_file = st.sidebar.file_uploader("Upload parsed experiment JSON", type=["json"])
+use_sample = st.sidebar.checkbox("Use sample file", value=True if uploaded_file is None else False)
+
+st.sidebar.markdown("### Scoring")
 lambda_score = st.sidebar.slider(
     "Trade-off weight (lambda)",
     min_value=0.5,
@@ -32,10 +77,7 @@ lambda_score = st.sidebar.slider(
     value=2.0,
     step=0.1,
 )
-
-uploaded_file = st.sidebar.file_uploader("Upload parsed experiment JSON", type=["json"])
-
-use_sample = st.sidebar.checkbox("Use sample file", value=True if uploaded_file is None else False)
+st.sidebar.caption("Higher lambda penalizes accuracy drop more strongly.")
 
 json_path = None
 
@@ -67,17 +109,54 @@ col2.metric("Non-baseline runs", len(non_baseline))
 col3.metric("Baseline runs", len(baseline_df))
 col4.metric("Lambda", f"{lambda_score:.1f}")
 
+best_tradeoff = get_top_configs(df, top_k=1)
+best_acc = get_best_accuracy_config(df)
+best_pin = get_max_pin_config(df)
+
+st.markdown("### Quick Recommendations")
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
+    if not best_tradeoff.empty:
+        row = best_tradeoff.iloc[0]
+        st.info(
+            "Best trade-off\n\n"
+            f"{format_config_text(row)}\n\n"
+            f"Pin Reduction: {row['pin_reduction']:.2f}%\n\n"
+            f"Accuracy Drop: {row['acc_drop_positive']:.2f}%"
+        )
+
+with c2:
+    if best_acc is not None:
+        st.info(
+            "Best accuracy retention\n\n"
+            f"{format_config_text(best_acc)}\n\n"
+            f"Max Accuracy: {best_acc['max_acc']:.2f}\n\n"
+            f"Trade-off Score: {best_acc['tradeoff_score']:.2f}"
+        )
+
+with c3:
+    if best_pin is not None:
+        st.info(
+            "Highest hardware gain\n\n"
+            f"{format_config_text(best_pin)}\n\n"
+            f"Pin Reduction: {best_pin['pin_reduction']:.2f}%\n\n"
+            f"Slice Reduction: {best_pin['slice_reduction']:.2f}%"
+        )
+
 st.text(build_summary_text(df, lambda_score))
 
 st.divider()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "Trade-off View",
         "Pareto View",
         "Config Explorer",
         "Epoch Curves",
         "Top Configs",
+        "Raw Data",
     ]
 )
 
@@ -146,10 +225,14 @@ with tab1:
             )
         )
 
-    fig.update_layout(
-        xaxis_title="Pin Reduction Rate (%)",
-        yaxis_title=y_title,
-        height=550,
+    plot_title = "Maximum Accuracy vs Pin Reduction" if view_mode == "Maximum Accuracy" else "Accuracy Drop vs Pin Reduction"
+    
+    fig = apply_plot_style(
+        fig,
+        title=plot_title,
+        x_title="Pin Reduction Rate (%)",
+        y_title=y_title,
+        height=620,
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -195,10 +278,12 @@ with tab2:
             )
         )
 
-    fig2.update_layout(
-        xaxis_title="Slice Reduction (%)",
-        yaxis_title="Accuracy Drop from Baseline (%)",
-        height=550,
+    fig2 = apply_plot_style(
+        fig2,
+        title="Slice Reduction vs Accuracy Drop",
+        x_title="Slice Reduction (%)",
+        y_title="Accuracy Drop from Baseline (%)",
+        height=620,
     )
 
     st.plotly_chart(fig2, use_container_width=True)
@@ -259,6 +344,34 @@ with tab3:
 
             st.dataframe(detail_df, use_container_width=True)
 
+            if not baseline_df.empty:
+            base_row = baseline_df.iloc[0]
+        
+            st.markdown("#### Baseline Comparison")
+        
+            b1, b2, b3 = st.columns(3)
+        
+            acc_diff = row["max_acc"] - base_row["max_acc"] if pd.notna(row["max_acc"]) and pd.notna(base_row["max_acc"]) else None
+            loss_diff = row["final_test_loss"] - base_row["final_test_loss"] if pd.notna(row["final_test_loss"]) and pd.notna(base_row["final_test_loss"]) else None
+        
+            b1.metric(
+                "Accuracy vs Baseline",
+                f"{row['max_acc']:.2f}",
+                f"{acc_diff:.2f}" if acc_diff is not None else None
+            )
+        
+            b2.metric(
+                "Loss vs Baseline",
+                f"{row['final_test_loss']:.4f}",
+                f"{loss_diff:.4f}" if loss_diff is not None else None
+            )
+        
+            b3.metric(
+                "Pin Reduction Gain",
+                f"{row['pin_reduction']:.2f}%",
+                None
+            )
+            
 with tab4:
     st.subheader("Epoch Curves")
 
@@ -339,18 +452,20 @@ with tab4:
                     )
                 )
 
-            fig_acc.update_layout(
+            fig_acc = apply_plot_style(
+                fig_acc,
                 title="Test Accuracy over Epochs",
-                xaxis_title="Epoch",
-                yaxis_title="Accuracy (%)",
-                height=450,
+                x_title="Epoch",
+                y_title="Accuracy (%)",
+                height=420,
             )
 
-            fig_loss.update_layout(
+            fig_loss = apply_plot_style(
+                fig_loss,
                 title="Test Loss over Epochs",
-                xaxis_title="Epoch",
-                yaxis_title="Loss",
-                height=450,
+                x_title="Epoch",
+                y_title="Loss",
+                height=420,
             )
 
             st.plotly_chart(fig_acc, use_container_width=True)
@@ -360,7 +475,7 @@ with tab5:
     st.subheader("Top Configurations by Trade-off Score")
 
     top_df = get_top_configs(df, top_k=10)
-
+    
     if top_df.empty:
         st.warning("No valid configurations.")
     else:
@@ -374,25 +489,37 @@ with tab5:
             "tradeoff_score",
         ]
         st.dataframe(top_df[show_cols], use_container_width=True)
-
-        fig3 = px.bar(
-            top_df,
-            x=top_df.index.astype(str),
-            y="tradeoff_score",
-            hover_data=["pack_ratio", "global_sparsity", "max_acc", "pin_reduction"],
-            title="Trade-off Score Ranking",
+    
+        bar_df = top_df.copy()
+        bar_df["config_label"] = bar_df.apply(
+            lambda r: f"PR={r['pack_ratio']:.2f}, GS={r['global_sparsity']:.2f}", axis=1
         )
+    
+        fig3 = px.bar(
+            bar_df,
+            x="config_label",
+            y="tradeoff_score",
+            hover_data=["max_acc", "pin_reduction", "slice_reduction", "acc_drop_positive"],
+        )
+    
+        fig3 = apply_plot_style(
+            fig3,
+            title="Trade-off Score Ranking",
+            x_title="Configuration",
+            y_title="Trade-off Score",
+            height=500,
+        )
+    
         st.plotly_chart(fig3, use_container_width=True)
 
-st.divider()
+with tab6:
+    st.subheader("Raw Data")
+    st.dataframe(df, use_container_width=True)
 
-st.subheader("Raw Data")
-st.dataframe(df, use_container_width=True)
-
-csv_data = df.to_csv(index=False).encode("utf-8-sig")
-st.download_button(
-    label="Download summary CSV",
-    data=csv_data,
-    file_name="experiment_summary.csv",
-    mime="text/csv",
-)
+    csv_data = df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="Download summary CSV",
+        data=csv_data,
+        file_name="experiment_summary.csv",
+        mime="text/csv",
+    )
