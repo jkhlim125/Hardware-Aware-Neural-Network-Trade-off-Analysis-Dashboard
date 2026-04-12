@@ -36,7 +36,7 @@ This tool was built to make hardware-aware trade-off analysis easier and more sy
 
 - `analysis_engine.py`: core analysis logic
 - `app.py`: Streamlit interface
-- `sample_experiments.json`: example input file
+- `sample_experiments.json`: sample experiment log file for testing the dashboard
 
 ## How to Run
 
