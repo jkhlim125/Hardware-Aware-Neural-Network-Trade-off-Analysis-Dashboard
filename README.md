@@ -1,84 +1,41 @@
-Experiment Log Anomaly Dashboard
+# Hardware-Aware Experiment Analysis Dashboard
 
-An interactive dashboard for analyzing experiment results, detecting anomalous runs, and improving reproducibility.
+This project is an interactive analysis tool for comparing experiment configurations in LUT-based neural networks from both accuracy and hardware-efficiency perspectives.
 
-https://projectsdashbord-epqfjyyegcxytbhlcsfizy.streamlit.app/
+It was developed to support structured comparison of different packing and sparsity configurations during FPGA-oriented neural network experiments.
 
-⸻
+## Main Features
 
-Overview
+- Parse experiment results from JSON logs
+- Compare maximum accuracy and accuracy drop against baseline
+- Analyze hardware-related metrics such as pin reduction, slice reduction, and packing efficiency
+- Compute a custom trade-off score for balancing hardware gain and accuracy penalty
+- Visualize Pareto frontiers for configuration comparison
+- Explore epoch-level curves for selected configurations
+- Export summary results as CSV
 
-Machine learning experiments often produce inconsistent results across runs, making it difficult to identify performance issues or compare outcomes effectively.
+## Motivation
 
-This project provides a structured dashboard that enables users to analyze experiment logs, detect anomalous runs, and understand performance differences across multiple metrics.
+In LUT-based neural network experiments, comparing configurations only by final accuracy is often not enough.
+This tool was built to make hardware-aware trade-off analysis easier and more systematic.
 
-⸻
+## Example Metrics
 
-Problem
+•	maximum test accuracy
+•	accuracy drop from baseline
+•	pin reduction rate
+•	slice reduction
+•	packing efficiency
+•	trade-off score
+	
+## Files
 
-Repeated experiments frequently show variation in performance due to randomness, hyperparameter sensitivity, or system-level factors.
+- `analysis_engine.py`: core analysis logic
+- `app.py`: Streamlit interface
+- `sample_experiments.json`: example input file
 
-Without proper tools, it is difficult to:
-	•	Identify which runs are abnormal
-	•	Compare performance across multiple metrics
-	•	Understand relationships between metrics
-	•	Extract meaningful insights from raw logs
+## How to Run
 
-⸻
-
-Solution
-
-This dashboard allows users to upload experiment logs and perform structured analysis through:
-	•	Run-level performance comparison
-	•	Statistical anomaly detection using z-score
-	•	Metric selection and filtering
-	•	Correlation analysis across metrics
-	•	Automated summary generation
-
-⸻
-
-Key Features
-	•	Detects anomalous runs based on statistical deviation from the mean
-	•	Enables comparison between individual runs and average performance
-	•	Provides normalized comparison for cross-metric analysis
-	•	Visualizes relationships using scatter plots and correlation heatmaps
-	•	Generates structured summaries for faster interpretation
-	•	Supports CSV-based workflow for easy integration
-
-⸻
-
-Tech Stack
-	•	Python
-	•	Streamlit
-	•	Pandas
-	•	NumPy
-	•	Plotly
-
-⸻
-
-How to Run Locally
-
+```bash
 pip install -r requirements.txt
 streamlit run app.py
-
-____
-
-Project Motivation
-
-This project was developed to address the challenge of analyzing unstable experiment results and improving reproducibility.
-
-The goal was to move beyond simple visualization and build a tool that supports structured analysis and decision-making based on experimental data.
-
-⸻
-
-Key Takeaways
-	•	Transformed raw experiment logs into an interactive analysis tool
-	•	Applied statistical methods to identify anomalous behavior
-	•	Designed workflows for comparing performance across multiple metrics
-	•	Built and deployed a usable web-based data analysis application
-
-⸻
-
-Author
-
-(Kiheon Lim)
