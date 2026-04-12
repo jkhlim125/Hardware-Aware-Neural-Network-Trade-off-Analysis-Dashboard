@@ -19,8 +19,6 @@ https://hardware-aware-experiment-dashboard-x95bufhzfrgdusxyf593hv.streamlit.app
 An earlier version of this project (`legacy_log_dashboard.py`) was initially developed for simple log visualization.  
 The current version extends this into a hardware-aware analysis tool with structured trade-off evaluation.
 
-## Main Features
-
 ## Key Features
 
 - Trade-off Visualization  
