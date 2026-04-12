@@ -345,32 +345,32 @@ with tab3:
             st.dataframe(detail_df, use_container_width=True)
 
             if not baseline_df.empty:
-            base_row = baseline_df.iloc[0]
-        
-            st.markdown("#### Baseline Comparison")
-        
-            b1, b2, b3 = st.columns(3)
-        
-            acc_diff = row["max_acc"] - base_row["max_acc"] if pd.notna(row["max_acc"]) and pd.notna(base_row["max_acc"]) else None
-            loss_diff = row["final_test_loss"] - base_row["final_test_loss"] if pd.notna(row["final_test_loss"]) and pd.notna(base_row["final_test_loss"]) else None
-        
-            b1.metric(
-                "Accuracy vs Baseline",
-                f"{row['max_acc']:.2f}",
-                f"{acc_diff:.2f}" if acc_diff is not None else None
-            )
-        
-            b2.metric(
-                "Loss vs Baseline",
-                f"{row['final_test_loss']:.4f}",
-                f"{loss_diff:.4f}" if loss_diff is not None else None
-            )
-        
-            b3.metric(
-                "Pin Reduction Gain",
-                f"{row['pin_reduction']:.2f}%",
-                None
-            )
+                base_row = baseline_df.iloc[0]
+            
+                st.markdown("#### Baseline Comparison")
+            
+                b1, b2, b3 = st.columns(3)
+            
+                acc_diff = row["max_acc"] - base_row["max_acc"] if pd.notna(row["max_acc"]) and pd.notna(base_row["max_acc"]) else None
+                loss_diff = row["final_test_loss"] - base_row["final_test_loss"] if pd.notna(row["final_test_loss"]) and pd.notna(base_row["final_test_loss"]) else None
+            
+                b1.metric(
+                    "Accuracy vs Baseline",
+                    f"{row['max_acc']:.2f}",
+                    f"{acc_diff:.2f}" if acc_diff is not None else None
+                )
+            
+                b2.metric(
+                    "Loss vs Baseline",
+                    f"{row['final_test_loss']:.4f}",
+                    f"{loss_diff:.4f}" if loss_diff is not None else None
+                )
+            
+                b3.metric(
+                    "Pin Reduction Gain",
+                    f"{row['pin_reduction']:.2f}%",
+                    None
+                )
             
 with tab4:
     st.subheader("Epoch Curves")
