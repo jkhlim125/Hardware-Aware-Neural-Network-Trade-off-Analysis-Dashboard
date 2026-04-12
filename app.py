@@ -59,8 +59,9 @@ st.set_page_config(page_title="Hardware-Aware Experiment Dashboard", layout="wid
 
 st.title("Hardware-Aware Experiment Analysis Dashboard")
 st.write(
-    "This tool is for comparing experiment configurations in LUT-based neural networks "
-    "from both accuracy and hardware-efficiency perspectives."
+    "This dashboard analyzes LUT-based neural network experiments by quantifying the trade-off "
+    "between hardware efficiency (e.g., pin/slice reduction) and model accuracy. "
+    "It helps identify optimal configurations under different hardware constraints."
 )
 
 st.sidebar.header("Settings")
@@ -114,6 +115,7 @@ best_acc = get_best_accuracy_config(df)
 best_pin = get_max_pin_config(df)
 
 st.markdown("### Quick Recommendations")
+st.caption("All metrics and improvements are measured relative to the baseline configuration.")
 
 c1, c2, c3 = st.columns(3)
 
@@ -123,8 +125,9 @@ with c1:
         st.info(
             "Best trade-off\n\n"
             f"{format_config_text(row)}\n\n"
-            f"Pin Reduction: {row['pin_reduction']:.2f}%\n\n"
-            f"Accuracy Drop: {row['acc_drop_positive']:.2f}%"
+            f"• Pin Reduction: {row['pin_reduction']:.2f}%\n"
+            f"• Accuracy Drop: {row['acc_drop_positive']:.2f}%\n\n"
+            "👉 Strong balance between hardware gain and accuracy preservation"
         )
 
 with c2:
@@ -134,6 +137,7 @@ with c2:
             f"{format_config_text(best_acc)}\n\n"
             f"Max Accuracy: {best_acc['max_acc']:.2f}\n\n"
             f"Trade-off Score: {best_acc['tradeoff_score']:.2f}"
+            "👉 Best when accuracy is the primary concern"
         )
 
 with c3:
@@ -143,6 +147,7 @@ with c3:
             f"{format_config_text(best_pin)}\n\n"
             f"Pin Reduction: {best_pin['pin_reduction']:.2f}%\n\n"
             f"Slice Reduction: {best_pin['slice_reduction']:.2f}%"
+            "👉 Maximizes hardware efficiency at the cost of accuracy"
         )
 
 st.text(build_summary_text(df, lambda_score))
@@ -473,7 +478,10 @@ with tab4:
 
 with tab5:
     st.subheader("Top Configurations by Trade-off Score")
-
+    st.caption(
+        "Configurations are ranked based on a trade-off score balancing hardware efficiency "
+        "(pin reduction) and accuracy loss using the selected lambda."
+    )
     top_df = get_top_configs(df, top_k=10)
     
     if top_df.empty:
