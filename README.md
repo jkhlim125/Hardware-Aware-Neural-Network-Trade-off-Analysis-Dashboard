@@ -4,6 +4,10 @@ This project is an interactive analysis tool for comparing experiment configurat
 
 It was developed to support structured comparison of different packing and sparsity configurations during FPGA-oriented neural network experiments.
 
+## Note
+An earlier version of this project (`legacy_log_dashboard.py`) was initially developed for simple log visualization.  
+The current version extends this into a hardware-aware analysis tool with structured trade-off evaluation.
+
 ## Main Features
 
 - Parse experiment results from JSON logs
@@ -39,8 +43,3 @@ This tool was built to make hardware-aware trade-off analysis easier and more sy
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
-
-## Note
-
-An earlier version of this project (`legacy_log_dashboard.py`) was initially developed for simple log visualization.  
-The current version extends this into a hardware-aware analysis tool with structured trade-off evaluation.
