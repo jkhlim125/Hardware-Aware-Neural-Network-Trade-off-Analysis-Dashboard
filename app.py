@@ -11,6 +11,8 @@ import streamlit as st
 from analysis_engine import (
     Constraints,
     apply_constraints,
+    compute_dominance_strength,
+    compute_efficiency_proxy,
     compute_pareto_frontier,
     compute_weighted_scores,
     summarize_rejections,
@@ -18,6 +20,7 @@ from analysis_engine import (
 )
 from parsers import load_and_normalize_data
 from recommendation import (
+    get_reference_candidates,
     recommend_best_accuracy,
     recommend_best_balanced,
     recommend_best_efficiency,
@@ -40,6 +43,17 @@ def _metric_str(v: object, unit: str = "", digits: int = 2) -> str:
     except Exception:
         text = str(v)
         return text if not unit else f"{text}{unit}"
+
+
+def _signed_metric_str(v: object, unit: str = "", digits: int = 2) -> str:
+    if v is None or pd.isna(v):
+        return "N/A"
+    try:
+        x = float(v)
+        sign = "+" if x > 0 else ""
+        return f"{sign}{x:.{digits}f}{unit}"
+    except Exception:
+        return str(v)
 
 
 def _existing_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
@@ -108,7 +122,8 @@ def _maybe_scatter(
 
 def _render_recommendation(rec: Optional[dict], reason: str) -> None:
     with st.container(border=True):
-        st.caption(reason)
+        if reason:
+            st.caption(reason)
         if rec is None:
             st.write("No recommendation available for the current feasible set.")
             return
@@ -130,10 +145,129 @@ def _render_recommendation(rec: Optional[dict], reason: str) -> None:
         st.dataframe(summary, use_container_width=True, hide_index=True)
 
 
+def _row_metric(row: dict | pd.Series | None, metric: str) -> float:
+    if row is None:
+        return np.nan
+    try:
+        return float(row.get(metric, np.nan))
+    except Exception:
+        return np.nan
+
+
+def _classify_tradeoff(row: pd.Series, df: pd.DataFrame) -> str:
+    accuracy = _row_metric(row, "accuracy")
+    latency = _row_metric(row, "latency_cycles")
+    efficiency = _row_metric(row, "efficiency_proxy")
+
+    acc_series = pd.to_numeric(df["accuracy"], errors="coerce") if "accuracy" in df.columns else pd.Series(np.nan, index=df.index)
+    lat_series = pd.to_numeric(df["latency_cycles"], errors="coerce") if "latency_cycles" in df.columns else pd.Series(np.nan, index=df.index)
+    eff_series = pd.to_numeric(df["efficiency_proxy"], errors="coerce") if "efficiency_proxy" in df.columns else pd.Series(np.nan, index=df.index)
+
+    if np.isfinite(accuracy) and np.isfinite(acc_series.max(skipna=True)) and accuracy >= acc_series.max(skipna=True) - 0.25:
+        return "accuracy-focused trade-off"
+    if np.isfinite(latency) and np.isfinite(lat_series.min(skipna=True)) and latency <= lat_series.min(skipna=True) + 75:
+        return "latency-driven trade-off"
+    if np.isfinite(efficiency) and np.isfinite(eff_series.max(skipna=True)) and efficiency >= eff_series.max(skipna=True) - 1.0:
+        return "hardware-efficient trade-off"
+    return "balanced design"
+
+
+def _build_pareto_summary(df: pd.DataFrame) -> str:
+    if df.empty or "is_pareto" not in df.columns:
+        return "Pareto Analysis Summary:\n- No Pareto interpretation is available."
+
+    pareto_rows = df[df["is_pareto"]].copy()
+    if pareto_rows.empty:
+        return "Pareto Analysis Summary:\n- No Pareto-optimal candidate was identified for the selected objectives."
+
+    if "dominated_count" not in pareto_rows.columns:
+        pareto_rows["dominated_count"] = 0
+    if "dominated_by_count" not in pareto_rows.columns:
+        pareto_rows["dominated_by_count"] = 0
+    pareto_rows = pareto_rows.sort_values(
+        ["dominated_count", "dominated_by_count"],
+        ascending=[False, True],
+        na_position="last",
+    )
+    lines = [f"Pareto Analysis Summary:\n- {len(pareto_rows)} Pareto-optimal candidates identified"]
+
+    for _, row in pareto_rows.head(3).iterrows():
+        config_id = row.get("config_id", "N/A")
+        dominated_count = int(row.get("dominated_count", 0) or 0)
+        label = _classify_tradeoff(row, df)
+        lines.append(f"- `{config_id}` dominates {dominated_count} other candidates -> {label}")
+
+    return "\n".join(lines)
+
+
+def _build_reference_comparison(selected_row: Optional[dict], reference_rows: dict[str, Optional[dict]]) -> pd.DataFrame:
+    if selected_row is None:
+        return pd.DataFrame()
+
+    selected_eff = compute_efficiency_proxy(pd.DataFrame([selected_row])).iloc[0]
+    rows: list[dict[str, object]] = []
+    for label, reference in reference_rows.items():
+        if reference is None:
+            continue
+        reference_eff = compute_efficiency_proxy(pd.DataFrame([reference])).iloc[0]
+        rows.append(
+            {
+                "reference": f"Best {label}",
+                "config_id": reference.get("config_id", "N/A"),
+                "delta_accuracy": _signed_metric_str(_row_metric(selected_row, "accuracy") - _row_metric(reference, "accuracy"), unit="%", digits=2),
+                "delta_latency": _signed_metric_str(_row_metric(selected_row, "latency_cycles") - _row_metric(reference, "latency_cycles"), unit=" cycles", digits=0),
+                "delta_efficiency": _signed_metric_str(selected_eff - reference_eff, digits=2),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_decision_boundary_summary(sweep_df: pd.DataFrame, sweep_metric: str) -> str:
+    if sweep_df.empty or "top_config_id" not in sweep_df.columns:
+        return "Decision boundary:\n- No sensitivity boundary was identified."
+
+    valid = sweep_df.dropna(subset=["top_config_id"]).sort_values("sweep").reset_index(drop=True)
+    if valid.empty:
+        return "Decision boundary:\n- No sensitivity boundary was identified."
+
+    segments: list[tuple[float, float, str]] = []
+    start = float(valid.loc[0, "sweep"])
+    current_config = str(valid.loc[0, "top_config_id"])
+    previous_value = start
+
+    for i in range(1, len(valid)):
+        sweep_value = float(valid.loc[i, "sweep"])
+        config_id = str(valid.loc[i, "top_config_id"])
+        if config_id != current_config:
+            segments.append((start, previous_value, current_config))
+            start = sweep_value
+            current_config = config_id
+        previous_value = sweep_value
+    segments.append((start, previous_value, current_config))
+
+    if len(segments) == 1:
+        return f"Decision boundary:\n- `{segments[0][2]}` remains preferred across the sampled `{sweep_metric}` weight range."
+
+    lines = ["Decision boundary:"]
+    for idx, (seg_start, seg_end, config_id) in enumerate(segments):
+        if idx == 0:
+            lines.append(f"- For sampled `{sweep_metric}` weights {seg_start:.1f} to {seg_end:.1f}: `{config_id}` is preferred")
+        else:
+            lines.append(f"- From `{sweep_metric}` weight {seg_start:.1f}: `{config_id}` becomes preferred")
+    return "\n".join(lines)
+
+
+def _result_parts(result: dict) -> tuple[Optional[dict], str]:
+    if not isinstance(result, dict):
+        return None, "No explanation available."
+    return result.get("row"), result.get("explanation", "")
+
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title(APP_TITLE)
 st.caption("Load candidate designs, enforce hard constraints, then compare only the feasible design space.")
+show_insight = st.checkbox("Show engineering insights", value=True)
 
 st.subheader("A. Data Input")
 left, right = st.columns([1.1, 1.9], vertical_alignment="top")
@@ -351,13 +485,19 @@ else:
 
     try:
         pareto_df = compute_pareto_frontier(pareto_df, objectives=objectives, directions=directions, flag_column="is_pareto")
+        pareto_df = compute_dominance_strength(pareto_df, objectives=objectives, directions=directions)
     except Exception as exc:
         pareto_df = _ensure_pareto_flag(feasible_df)
         st.warning(f"Pareto computation was skipped safely: {exc}")
 
     pareto_df = _ensure_pareto_flag(pareto_df)
+    if "efficiency_proxy" not in pareto_df.columns:
+        pareto_df["efficiency_proxy"] = compute_efficiency_proxy(pareto_df)
     pareto_count = int(pareto_df["is_pareto"].sum()) if "is_pareto" in pareto_df.columns else 0
     st.caption(f"Pareto-optimal feasible candidates: {pareto_count}")
+
+    if show_insight:
+        st.markdown(_build_pareto_summary(pareto_df))
 
     pareto_table = pareto_df[pareto_df["is_pareto"]] if show_pareto_only else pareto_df
     pareto_table = _ensure_pareto_flag(pareto_table)
@@ -374,6 +514,8 @@ else:
             "latency_cycles",
             "pins",
             "slices",
+            "dominated_count",
+            "dominated_by_count",
             "pin_reduction",
             "slice_reduction",
             "source",
@@ -416,15 +558,24 @@ else:
     )
 
     if recommendation_mode == "Best Accuracy":
-        recommendation, reason = recommend_best_accuracy(feasible_df)
+        recommendation_result = recommend_best_accuracy(feasible_df)
     elif recommendation_mode == "Best Latency":
-        recommendation, reason = recommend_best_latency(feasible_df)
+        recommendation_result = recommend_best_latency(feasible_df)
     elif recommendation_mode == "Best Efficiency":
-        recommendation, reason = recommend_best_efficiency(feasible_df)
+        recommendation_result = recommend_best_efficiency(feasible_df)
     else:
-        recommendation, reason = recommend_best_balanced(feasible_df, 1.0, 1.0, 1.0)
+        recommendation_result = recommend_best_balanced(feasible_df, 1.0, 1.0, 1.0)
 
-    _render_recommendation(recommendation, reason)
+    recommendation, reason = _result_parts(recommendation_result)
+    _render_recommendation(recommendation, "")
+
+    if show_insight:
+        st.markdown(reason)
+        reference_candidates = get_reference_candidates(feasible_df)
+        comparison_df = _build_reference_comparison(recommendation, reference_candidates)
+        if not comparison_df.empty:
+            st.markdown("**Comparison vs Alternatives**")
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
 st.subheader("F. Sensitivity")
 if feasible_df.empty:
@@ -509,6 +660,8 @@ else:
             st.warning(f"Sensitivity plot was skipped safely: {exc}")
 
         st.dataframe(sweep_df, use_container_width=True, hide_index=True)
+        if show_insight:
+            st.markdown(_build_decision_boundary_summary(sweep_df, sweep_metric))
     else:
         st.info("Sweep produced no scorable candidate changes for the current feasible set.")
 
