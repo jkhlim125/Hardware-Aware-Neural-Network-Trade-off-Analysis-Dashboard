@@ -128,6 +128,97 @@ def summarize_rejections(rejected_df: pd.DataFrame, top_k: int = 8) -> pd.DataFr
     return pd.DataFrame({"reason": [k for k, _ in items], "count": [v for _, v in items]})
 
 
+def _resolve_objectives(
+    df: pd.DataFrame,
+    objectives: Sequence[str],
+    directions: Sequence[Direction],
+) -> Tuple[pd.DataFrame, list[str], list[Direction], pd.DataFrame]:
+    out = ensure_numeric_columns(df).copy()
+    if out.empty or not objectives or len(objectives) != len(directions):
+        return out, [], [], pd.DataFrame(index=out.index)
+
+    active_objectives: list[str] = []
+    active_directions: list[Direction] = []
+    for objective, direction in zip(objectives, directions):
+        if objective in out.columns:
+            active_objectives.append(objective)
+            active_directions.append(direction)
+
+    pts = out[active_objectives].apply(pd.to_numeric, errors="coerce") if active_objectives else pd.DataFrame(index=out.index)
+    return out, active_objectives, active_directions, pts
+
+
+def _dominates(
+    row_a: pd.Series,
+    row_b: pd.Series,
+    objectives: Sequence[str],
+    directions: Sequence[Direction],
+) -> bool:
+    comparable = 0
+    strictly_better = False
+
+    for objective, direction in zip(objectives, directions):
+        a_val = row_a.get(objective, np.nan)
+        b_val = row_b.get(objective, np.nan)
+
+        if pd.isna(a_val) and pd.isna(b_val):
+            continue
+        if pd.isna(a_val) or pd.isna(b_val):
+            return False
+
+        comparable += 1
+        if direction == "maximize":
+            if a_val < b_val:
+                return False
+            if a_val > b_val:
+                strictly_better = True
+        else:
+            if a_val > b_val:
+                return False
+            if a_val < b_val:
+                strictly_better = True
+
+    return comparable > 0 and strictly_better
+
+
+def compute_dominance_strength(
+    df: pd.DataFrame,
+    objectives: Sequence[str],
+    directions: Sequence[Direction],
+) -> pd.DataFrame:
+    """
+    Annotate candidates with pairwise Pareto dominance counts.
+
+    Adds:
+      - `dominated_count`: number of other rows this candidate dominates
+      - `dominated_by_count`: number of other rows that dominate this candidate
+    """
+    out, active_objectives, active_directions, pts = _resolve_objectives(df, objectives, directions)
+    out["dominated_count"] = 0
+    out["dominated_by_count"] = 0
+
+    if out.empty or not active_objectives or pts.empty:
+        return out
+
+    candidate_idxs = pts.index[pts.notna().any(axis=1)].tolist()
+    for i in candidate_idxs:
+        dominates_count = 0
+        dominated_by_count = 0
+        row_i = pts.loc[i]
+        for j in candidate_idxs:
+            if i == j:
+                continue
+            row_j = pts.loc[j]
+            if _dominates(row_i, row_j, active_objectives, active_directions):
+                dominates_count += 1
+            if _dominates(row_j, row_i, active_objectives, active_directions):
+                dominated_by_count += 1
+        out.at[i, "dominated_count"] = int(dominates_count)
+        out.at[i, "dominated_by_count"] = int(dominated_by_count)
+
+    return out
+
+
 def compute_pareto_frontier(
     df: pd.DataFrame,
     objectives: Sequence[str],
@@ -140,53 +231,15 @@ def compute_pareto_frontier(
     Pareto-optimal means: no other candidate is strictly better in all objectives
     (with at least one strict improvement) under the given directions.
     """
-    out = ensure_numeric_columns(df).copy()
+    out, active_objectives, active_directions, pts = _resolve_objectives(df, objectives, directions)
     out[flag_column] = False
 
-    if out.empty or not objectives or len(objectives) != len(directions):
+    if out.empty or not active_objectives or pts.empty:
         return out
 
-    active_objectives: list[str] = []
-    active_directions: list[Direction] = []
-    for objective, direction in zip(objectives, directions):
-        if objective in out.columns:
-            active_objectives.append(objective)
-            active_directions.append(direction)
-
-    if not active_objectives:
-        return out
-
-    pts = out[active_objectives].apply(pd.to_numeric, errors="coerce")
     comparable_rows = pts.notna().any(axis=1)
     if not comparable_rows.any():
         return out
-
-    def dominates(row_a: pd.Series, row_b: pd.Series) -> bool:
-        comparable = 0
-        strictly_better = False
-
-        for objective, direction in zip(active_objectives, active_directions):
-            a_val = row_a.get(objective, np.nan)
-            b_val = row_b.get(objective, np.nan)
-
-            if pd.isna(a_val) and pd.isna(b_val):
-                continue
-            if pd.isna(a_val) or pd.isna(b_val):
-                return False
-
-            comparable += 1
-            if direction == "maximize":
-                if a_val < b_val:
-                    return False
-                if a_val > b_val:
-                    strictly_better = True
-            else:
-                if a_val > b_val:
-                    return False
-                if a_val < b_val:
-                    strictly_better = True
-
-        return comparable > 0 and strictly_better
 
     candidate_idxs = out.index[comparable_rows].tolist()
     for i in candidate_idxs:
@@ -195,7 +248,7 @@ def compute_pareto_frontier(
         for j in candidate_idxs:
             if i == j:
                 continue
-            if dominates(pts.loc[j], row_i):
+            if _dominates(pts.loc[j], row_i, active_objectives, active_directions):
                 dominated = True
                 break
         out.at[i, flag_column] = not dominated
