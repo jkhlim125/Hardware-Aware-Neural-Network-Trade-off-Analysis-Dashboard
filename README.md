@@ -1,139 +1,153 @@
+# Constraint-Aware Hardware Design Decision Support Dashboard
+
+https://hardware-aware-neural-network-trade-off-analysis-dashboard-esw.streamlit.app/
+
 ## Overview
 
-This project is a Streamlit-based **hardware design decision tool** for comparing candidate configurations under explicit engineering constraints.
+This project is a **constraint-aware decision analytics system** for evaluating hardware design trade-offs.
 
-The app is intentionally **constraint-first**:
+Rather than acting as a generic dashboard, the tool is designed to reflect how real engineering decisions are made:
 
-1. Load and normalize candidate data
-2. Apply hard constraints to split **feasible** and **rejected** candidates
-3. Compute a Pareto frontier on the feasible set
-4. Recommend a configuration under a chosen decision mode
-5. Run weight-based sensitivity analysis on feasible candidates only
+- Designs must satisfy **hard constraints** before comparison  
+- Trade-offs must be evaluated across **multiple conflicting objectives**  
+- Final decisions should be **explainable and robust to changing priorities**
 
-The goal is not to behave like a generic dashboard. It is meant to support engineering decisions with explicit filtering, traceable rejection reasons, and graceful handling of incomplete data.
+The system transforms heterogeneous inputs (experiment logs, structured trade-off tables, and RTL-derived results) into a unified decision pipeline that produces:
 
-## Supported inputs
+- Feasible vs rejected design candidates (with explicit reasons)
+- Pareto-optimal configurations
+- Interpretable recommendations
+- Sensitivity-aware decision boundaries
 
-### `sample_tradeoff.csv`
+---
 
-Structured trade-off table with metrics such as:
+## Motivation
 
-- `accuracy`
-- `latency_cycles`
-- `pins`
-- `slices`
-- `pin_reduction`
-- `slice_reduction`
+In hardware and systems design, selecting a configuration is not a simple optimization problem.
 
-### `sample_experiments.json`
+A design may:
+- Achieve higher accuracy but violate latency constraints  
+- Reduce resource usage but degrade performance  
+- Perform differently depending on changing priorities  
 
-Experiment-log style input. The parser maps experiment summaries into the app's canonical candidate schema.
+Most tools either:
+- Focus on visualization, or  
+- Apply fixed scoring without explaining trade-offs  
 
-### `sample_rtl_results.csv`
+This project addresses that gap by building a **constraint-first decision system** that prioritizes:
 
-RTL latency comparison input with columns:
+- Explicit feasibility filtering  
+- Multi-objective trade-off analysis  
+- Explainable recommendation logic  
 
-- `run_id`
-- `latency_lut`
-- `latency_mac`
+---
 
-The parser converts this file into two candidates:
+## System Design
 
-- `design_type = LUT`
-- `design_type = MAC`
+The application follows a structured decision pipeline:
 
-Both are tagged with `source = rtl_simulation`. The app keeps missing metrics such as `accuracy`, `pins`, and `slices` as `NaN` and skips unsupported comparisons automatically.
+1. **Data ingestion and normalization**
+   - Supports CSV, JSON, and RTL-derived inputs
+   - Converts all inputs into a unified candidate schema
 
-## Key behavior
+2. **Constraint filtering**
+   - Applies hard engineering constraints (e.g., latency, accuracy)
+   - Splits candidates into feasible and rejected sets
+   - Tracks rejection reasons explicitly
 
-### Hard constraints
+3. **Pareto frontier analysis**
+   - Identifies non-dominated configurations
+   - Handles partial data without failure
+   - Highlights trade-offs across objectives
 
-The default UI starts with these active constraints:
+4. **Recommendation layer**
+   - Selects configurations based on decision modes:
+     - Accuracy-focused
+     - Latency-focused
+     - Efficiency-focused
+     - Balanced
+   - Provides **explicit trade-off explanations**
 
-- `min_accuracy = 90`
-- `max_latency_cycles = 1500`
+5. **Sensitivity analysis**
+   - Evaluates how decisions change with weight adjustments
+   - Identifies **decision boundaries** between configurations
 
-Additional resource constraints can be enabled as needed. The user can also choose how missing metrics are treated:
+---
 
-- treat missing metrics as infeasible
-- ignore missing metrics for active constraints
+## Key Features
 
-Constraint evaluation returns:
+### Constraint-First Decision Flow
 
-- `feasible_df`
-- `rejected_df`
+Unlike typical dashboards, this system enforces feasibility before optimization:
 
-Rejected candidates include:
+- Infeasible designs are removed early
+- Each rejection is traceable to specific constraints
 
-- `rejection_reasons`
-- `rejection_reason_str`
+---
 
-### Pareto frontier
+### Multi-Source Data Integration
 
-`analysis_engine.compute_pareto_frontier()` now:
+The tool supports multiple input formats:
 
-- returns all rows
-- always adds `is_pareto`
-- never raises for missing objectives or partial data
+- Structured trade-off tables (`CSV`)
+- Experiment logs (`JSON`)
+- RTL simulation outputs (`CSV`)
 
-A candidate is marked Pareto-optimal if no other candidate dominates it across the selected objectives and directions.
+All inputs are normalized into a unified representation, enabling consistent comparison.
 
-### Recommendation modes
+---
 
-Recommendations run on the **feasible set only**:
+### Robust Pareto Analysis
 
-- Best Accuracy
-- Best Latency
-- Best Efficiency
-- Balanced
+- Works with incomplete or partial data  
+- Avoids failure when some metrics are missing  
+- Marks Pareto-optimal candidates directly in the dataset  
 
-Each mode returns:
+---
 
-- the selected candidate row
-- a short reason string
+### Explainable Recommendations
 
-### Weighted scoring
+Each recommendation includes:
 
-Balanced scoring uses min-max normalization and combines available terms only:
+- Why the configuration was selected  
+- What trade-offs were made  
+- How it compares to alternative candidates  
 
-`score = w_acc * acc_norm - w_lat * lat_norm + w_eff * eff_norm`
+This shifts the system from **result reporting → decision explanation**
 
-Missing terms are ignored safely so partial candidate data does not crash the tool.
+---
 
-### Sensitivity analysis
+### Sensitivity-Aware Decision Making
 
-The app can sweep one weight at a time and show:
+The system can:
 
-- top score across the sweep
-- top configuration selected at each sweep value
-- whether the selected configuration changes
+- Sweep decision weights  
+- Track configuration changes  
+- Identify transition points where optimal choices shift  
 
-## UI flow
+This provides insight into **decision robustness**, not just static results.
 
-The app is organized as:
+---
 
-- `A. Data Input`
-- `B. Constraints`
-- `C. Feasible Candidates`
-- `D. Pareto Frontier`
-- `E. Recommended Configuration`
-- `F. Sensitivity`
+## Example Workflow
 
-Each section is designed to degrade gracefully:
+1. Load candidate data (e.g., pruning experiments or RTL results)  
+2. Apply constraints (e.g., latency ≤ 1500 cycles, accuracy ≥ 90%)  
+3. Inspect feasible candidates and rejection reasons  
+4. Analyze Pareto-optimal configurations  
+5. Select a recommendation mode  
+6. Evaluate sensitivity to changing priorities  
 
-- empty dataframes show messages instead of crashing
-- missing columns skip unsupported tables and plots
-- no feasible candidates skips Pareto and recommendation safely
-- plot failures are caught and shown as warnings
+---
 
-## Project structure
+## Project Structure
 
 ```text
 stream/
-├── app.py
-├── analysis_engine.py
-├── parsers.py
-├── recommendation.py
+├── app.py                  # Streamlit UI (decision flow)
+├── analysis_engine.py      # Constraints, Pareto, scoring
+├── parsers.py              # Data ingestion and normalization
+├── recommendation.py       # Recommendation logic + explanations
 ├── sample_data/
 │   ├── sample_tradeoff.csv
 │   ├── sample_experiments.json
@@ -141,15 +155,33 @@ stream/
 ├── README.md
 └── requirements.txt
 ```
-
-## Run locally
-
-```bash
+Run Locally
+```
 pip install -r requirements.txt
 streamlit run app.py
 ```
+Technical Highlights
+	•	Constraint-based filtering with explicit rejection tracking
+	•	Generic Pareto frontier computation across arbitrary objectives
+	•	Robust handling of missing or partial data
+	•	Modular pipeline separating parsing, analysis, and recommendation
+	•	Interactive UI designed for decision workflows rather than visualization
 
-## Notes
+⸻
 
-- The app is structured to avoid Python tracebacks in normal user interaction by guarding empty, partial, and unsupported cases.
-- RTL-derived candidates are intentionally allowed to remain partial so latency-only evidence can still participate in the workflow where appropriate.
+Takeaways
+
+This project demonstrates how raw engineering data can be transformed into a structured decision-making system.
+
+Key focus areas:
+	•	Turning data into actionable decisions
+	•	Making trade-offs explicit and explainable
+	•	Designing systems that remain robust under incomplete information
+
+⸻
+
+Future Work
+	•	Integrate predictive modeling for missing metrics (e.g., accuracy estimation)
+	•	Extend to larger-scale design space exploration
+	•	Connect directly with hardware synthesis or training pipelines
+	•	Add automated trade-off reporting for design documentation
