@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Literal, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -60,42 +60,47 @@ def apply_constraints(
     out["rejection_reasons"] = [[] for _ in range(len(out))]
 
     def add_reason(mask: pd.Series, reason: str) -> None:
+        if out.empty:
+            return
+        mask = mask.reindex(out.index, fill_value=False).astype(bool)
         if not mask.any():
             return
         idxs = out.index[mask].tolist()
         for i in idxs:
             out.at[i, "rejection_reasons"] = list(out.at[i, "rejection_reasons"]) + [reason]
 
-    def violates_min(col: str, thr: float, label: str) -> None:
+    def violates_min(col: str, thr: float, label: str, reason_label: str) -> None:
         if col not in out.columns:
-            add_reason(pd.Series([True] * len(out), index=out.index), f"missing metric: {label}")
+            if constraints.treat_nan_as_violation:
+                add_reason(pd.Series(True, index=out.index), f"missing metric: {label}")
             return
         s = pd.to_numeric(out[col], errors="coerce")
         if constraints.treat_nan_as_violation:
             add_reason(s.isna(), f"missing metric: {label}")
-        add_reason(s.notna() & (s < thr), f"rejected: {label} < {thr}")
+        add_reason(s.notna() & (s < thr), f"{label} < {reason_label} ({thr:g})")
 
-    def violates_max(col: str, thr: float, label: str) -> None:
+    def violates_max(col: str, thr: float, label: str, reason_label: str) -> None:
         if col not in out.columns:
-            add_reason(pd.Series([True] * len(out), index=out.index), f"missing metric: {label}")
+            if constraints.treat_nan_as_violation:
+                add_reason(pd.Series(True, index=out.index), f"missing metric: {label}")
             return
         s = pd.to_numeric(out[col], errors="coerce")
         if constraints.treat_nan_as_violation:
             add_reason(s.isna(), f"missing metric: {label}")
-        add_reason(s.notna() & (s > thr), f"rejected: {label} > {thr}")
+        add_reason(s.notna() & (s > thr), f"{label} > {reason_label} ({thr:g})")
 
     if constraints.min_accuracy is not None:
-        violates_min("accuracy", float(constraints.min_accuracy), "accuracy")
+        violates_min("accuracy", float(constraints.min_accuracy), "accuracy", "min_accuracy")
     if constraints.max_latency_cycles is not None:
-        violates_max("latency_cycles", float(constraints.max_latency_cycles), "latency_cycles")
+        violates_max("latency_cycles", float(constraints.max_latency_cycles), "latency_cycles", "max_latency_cycles")
     if constraints.max_pins is not None:
-        violates_max("pins", float(constraints.max_pins), "pins")
+        violates_max("pins", float(constraints.max_pins), "pins", "max_pins")
     if constraints.max_slices is not None:
-        violates_max("slices", float(constraints.max_slices), "slices")
+        violates_max("slices", float(constraints.max_slices), "slices", "max_slices")
     if constraints.min_pin_reduction is not None:
-        violates_min("pin_reduction", float(constraints.min_pin_reduction), "pin_reduction")
+        violates_min("pin_reduction", float(constraints.min_pin_reduction), "pin_reduction", "min_pin_reduction")
     if constraints.min_slice_reduction is not None:
-        violates_min("slice_reduction", float(constraints.min_slice_reduction), "slice_reduction")
+        violates_min("slice_reduction", float(constraints.min_slice_reduction), "slice_reduction", "min_slice_reduction")
 
     out["is_feasible"] = out["rejection_reasons"].apply(lambda r: len(r) == 0)
     out["rejection_reason_str"] = out["rejection_reasons"].apply(lambda r: "; ".join(r))
@@ -135,53 +140,66 @@ def compute_pareto_frontier(
     Pareto-optimal means: no other candidate is strictly better in all objectives
     (with at least one strict improvement) under the given directions.
     """
-    if len(objectives) != len(directions):
-        raise ValueError("`objectives` and `directions` must have the same length.")
-
     out = ensure_numeric_columns(df).copy()
     out[flag_column] = False
 
-    if out.empty:
+    if out.empty or not objectives or len(objectives) != len(directions):
         return out
 
-    needed = [c for c in objectives if c not in out.columns]
-    if needed:
-        # Cannot compute Pareto meaningfully without objective columns.
+    active_objectives: list[str] = []
+    active_directions: list[Direction] = []
+    for objective, direction in zip(objectives, directions):
+        if objective in out.columns:
+            active_objectives.append(objective)
+            active_directions.append(direction)
+
+    if not active_objectives:
         return out
 
-    pts = out[list(objectives)].apply(pd.to_numeric, errors="coerce")
-    valid_mask = pts.notna().all(axis=1)
-    if valid_mask.sum() == 0:
+    pts = out[active_objectives].apply(pd.to_numeric, errors="coerce")
+    comparable_rows = pts.notna().any(axis=1)
+    if not comparable_rows.any():
         return out
 
-    pts = pts[valid_mask]
+    def dominates(row_a: pd.Series, row_b: pd.Series) -> bool:
+        comparable = 0
+        strictly_better = False
 
-    # Convert to a "maximize everything" space by negating minimize objectives.
-    pts_adj = pts.copy()
-    for c, d in zip(objectives, directions):
-        if d == "minimize":
-            pts_adj[c] = -pts_adj[c]
+        for objective, direction in zip(active_objectives, active_directions):
+            a_val = row_a.get(objective, np.nan)
+            b_val = row_b.get(objective, np.nan)
 
-    idxs = pts_adj.index.tolist()
-    values = pts_adj.to_numpy()
-    pareto = np.ones(len(values), dtype=bool)
+            if pd.isna(a_val) and pd.isna(b_val):
+                continue
+            if pd.isna(a_val) or pd.isna(b_val):
+                return False
 
-    # Readable O(n^2) dominance check (good enough for typical dashboard sizes).
-    for i in range(len(values)):
-        if not pareto[i]:
-            continue
-        vi = values[i]
-        for j in range(len(values)):
+            comparable += 1
+            if direction == "maximize":
+                if a_val < b_val:
+                    return False
+                if a_val > b_val:
+                    strictly_better = True
+            else:
+                if a_val > b_val:
+                    return False
+                if a_val < b_val:
+                    strictly_better = True
+
+        return comparable > 0 and strictly_better
+
+    candidate_idxs = out.index[comparable_rows].tolist()
+    for i in candidate_idxs:
+        row_i = pts.loc[i]
+        dominated = False
+        for j in candidate_idxs:
             if i == j:
                 continue
-            vj = values[j]
-            # vj dominates vi if vj >= vi in all dims and > in at least one.
-            if np.all(vj >= vi) and np.any(vj > vi):
-                pareto[i] = False
+            if dominates(pts.loc[j], row_i):
+                dominated = True
                 break
+        out.at[i, flag_column] = not dominated
 
-    pareto_ids = [idxs[i] for i, keep in enumerate(pareto) if keep]
-    out.loc[pareto_ids, flag_column] = True
     return out
 
 
@@ -189,9 +207,24 @@ def _minmax_norm(s: pd.Series) -> pd.Series:
     x = pd.to_numeric(s, errors="coerce")
     lo = x.min(skipna=True)
     hi = x.max(skipna=True)
-    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+    if not np.isfinite(lo) or not np.isfinite(hi):
         return pd.Series(np.nan, index=s.index)
+    if hi <= lo:
+        out = pd.Series(np.nan, index=s.index)
+        out.loc[x.notna()] = 0.0
+        return out
     return (x - lo) / (hi - lo)
+
+
+def compute_efficiency_proxy(df: pd.DataFrame) -> pd.Series:
+    d = ensure_numeric_columns(df)
+    pin_red = pd.to_numeric(d["pin_reduction"], errors="coerce") if "pin_reduction" in d.columns else pd.Series(np.nan, index=d.index)
+    slice_red = pd.to_numeric(d["slice_reduction"], errors="coerce") if "slice_reduction" in d.columns else pd.Series(np.nan, index=d.index)
+
+    proxy = pin_red.fillna(0.0) + slice_red.fillna(0.0)
+    has_component = pin_red.notna() | slice_red.notna()
+    proxy = proxy.where(has_component, np.nan)
+    return proxy
 
 
 def compute_weighted_scores(
@@ -205,8 +238,8 @@ def compute_weighted_scores(
     Compute a simple, explainable weighted score among feasible candidates only.
 
     - accuracy term: higher is better (normalized)
-    - latency term: lower is better (normalized and inverted)
-    - efficiency term: average of available {pin_reduction, slice_reduction, packing_efficiency} (normalized)
+    - latency term: lower is better (normalized, subtracted)
+    - efficiency term: higher (pin_reduction + slice_reduction) is better
     """
     d = ensure_numeric_columns(df_feasible).copy()
     if d.empty:
@@ -218,47 +251,47 @@ def compute_weighted_scores(
         raise ValueError("Weights must be non-negative.")
     if weights.sum() == 0:
         weights = np.array([1.0, 1.0, 1.0])
-    weights = weights / weights.sum()
-
     acc_norm = _minmax_norm(d["accuracy"]) if "accuracy" in d.columns else pd.Series(np.nan, index=d.index)
     lat_norm = _minmax_norm(d["latency_cycles"]) if "latency_cycles" in d.columns else pd.Series(np.nan, index=d.index)
-    lat_term = 1.0 - lat_norm if lat_norm.notna().any() else pd.Series(np.nan, index=d.index)
-
-    eff_parts: List[pd.Series] = []
-    for c in ["pin_reduction", "slice_reduction", "packing_efficiency"]:
-        if c in d.columns and pd.to_numeric(d[c], errors="coerce").notna().any():
-            eff_parts.append(_minmax_norm(d[c]))
-    eff_term = pd.concat(eff_parts, axis=1).mean(axis=1) if eff_parts else pd.Series(np.nan, index=d.index)
+    eff_norm = _minmax_norm(compute_efficiency_proxy(d))
 
     d["score_accuracy_norm"] = acc_norm
-    d["score_latency_norm"] = lat_term
-    d["score_efficiency_norm"] = eff_term
+    d["score_latency_norm"] = lat_norm
+    d["score_efficiency_norm"] = eff_norm
 
-    # Use available metrics only: if a term is all-NaN, drop its weight and renormalize.
-    term_matrix = pd.DataFrame(
+    terms = pd.DataFrame(
         {
             "accuracy": acc_norm,
-            "latency": lat_term,
-            "efficiency": eff_term,
+            "latency": -lat_norm,
+            "efficiency": eff_norm,
+        },
+        index=d.index,
+    )
+
+    raw_weights = pd.Series(
+        {
+            "accuracy": float(weights[0]),
+            "latency": float(weights[1]),
+            "efficiency": float(weights[2]),
         }
     )
-    term_avail = term_matrix.notna().any(axis=0).to_numpy(dtype=bool)
-    w = weights.copy()
-    w[~term_avail] = 0.0
-    if w.sum() == 0:
+    dataset_available = terms.notna().any(axis=0)
+    effective_weights = raw_weights.where(dataset_available, 0.0)
+    if effective_weights.sum() == 0:
         d[score_column] = np.nan
         return d, {"note": "No scorable metrics available among feasible candidates."}
-    w = w / w.sum()
 
-    d[score_column] = (
-        w[0] * term_matrix["accuracy"].fillna(0.0)
-        + w[1] * term_matrix["latency"].fillna(0.0)
-        + w[2] * term_matrix["efficiency"].fillna(0.0)
-    )
+    row_weight_sum = terms.notna().mul(effective_weights, axis=1).sum(axis=1)
+    weighted_sum = terms.fillna(0.0).mul(effective_weights, axis=1).sum(axis=1)
+    d[score_column] = weighted_sum.divide(row_weight_sum).where(row_weight_sum > 0, np.nan)
 
     meta = {
-        "weights_used": f"accuracy={w[0]:.2f}, latency={w[1]:.2f}, efficiency={w[2]:.2f}",
-        "note": "Score is computed only across feasible candidates using min-max normalization.",
+        "weights_used": (
+            f"accuracy={effective_weights['accuracy']:.2f}, "
+            f"latency={effective_weights['latency']:.2f}, "
+            f"efficiency={effective_weights['efficiency']:.2f}"
+        ),
+        "note": "Score is computed on the feasible set using min-max normalization and ignores missing terms row by row.",
     }
     return d, meta
 
@@ -277,6 +310,7 @@ def sweep_single_weight(
         base_weights = {"accuracy": 1.0, "latency": 1.0, "efficiency": 1.0}
 
     rows = []
+    previous_top = None
     for v in values:
         w_acc = float(base_weights.get("accuracy", 1.0))
         w_lat = float(base_weights.get("latency", 1.0))
@@ -292,9 +326,18 @@ def sweep_single_weight(
         scored, _ = compute_weighted_scores(df_feasible, w_acc, w_lat, w_eff)
         scored = scored.dropna(subset=["weighted_score"]) if "weighted_score" in scored.columns else scored
         if scored.empty:
-            rows.append({"sweep": v, "top_config_id": None, "top_score": np.nan})
+            rows.append({"sweep": v, "top_config_id": None, "top_score": np.nan, "selection_changed": False})
             continue
         best = scored.sort_values("weighted_score", ascending=False).iloc[0]
-        rows.append({"sweep": v, "top_config_id": best.get("config_id"), "top_score": best.get("weighted_score")})
+        top_config_id = best.get("config_id")
+        rows.append(
+            {
+                "sweep": v,
+                "top_config_id": top_config_id,
+                "top_score": best.get("weighted_score"),
+                "selection_changed": bool(previous_top is not None and top_config_id != previous_top),
+            }
+        )
+        previous_top = top_config_id
 
     return pd.DataFrame(rows)
