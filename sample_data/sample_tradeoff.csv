@@ -1,0 +1,7 @@
+config_id,design_type,model_name,accuracy,accuracy_drop,latency_cycles,pins,slices,pin_reduction,slice_reduction,packing_efficiency,lut_usage,notes,source
+baseline,baseline,resnet18,92.1,0.0,1600,320,1800,0.0,0.0,0.78,0.62,"Reference baseline design point",sample_tradeoff
+prune_A,pruned,resnet18,91.3,0.8,1450,290,1500,9.4,16.7,0.81,0.58,"Moderate pruning; good resource reduction",sample_tradeoff
+prune_B,pruned,resnet18,90.2,1.9,1320,270,1320,15.6,26.7,0.84,0.55,"Aggressive pruning; stronger reduction",sample_tradeoff
+pack_1,packed,resnet18,91.0,1.1,1380,260,1250,18.8,30.6,0.88,0.54,"Packing-enabled candidate; higher packing efficiency",sample_tradeoff
+pack_2,packed,resnet18,89.6,2.5,1200,250,1180,21.9,34.4,0.90,0.53,"Low-latency but larger accuracy drop",sample_tradeoff
+quant_1,quantized,resnet18,91.8,0.3,1550,310,1700,3.1,5.6,0.79,0.61,"Quantization-only; near-baseline accuracy",sample_tradeoff
